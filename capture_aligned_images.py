@@ -54,9 +54,10 @@ print("Depth Scale is: " , depth_scale)
 # We will be removing the background of objects more than clipping_distance_in_meters meters away
 clipping_distance_in_meters = 1  #1 meter
 clipping_distance = clipping_distance_in_meters / depth_scale
+
 # Create an align object
 # rs.align allows us to perform alignment of depth frames to others frames
-
+# The "align_to" is the stream type to which we plan to align depth frames.
 align_to = rs.stream.color
 align = rs.align(align_to)
 

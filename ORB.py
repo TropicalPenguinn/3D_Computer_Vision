@@ -5,23 +5,24 @@ import cv2
 import matplotlib.pyplot as plt
 from registration import match_ransac
 from utils import get_boundary
+
 ########################################################################################################################
-# Intrinsic parameter
+# Intrinsic parameter of Intel RealSense D415
 ########################################################################################################################
 K = np.array(
-     [[597.522, 0.0, 312.885],
+    [[597.522, 0.0, 312.885],
      [0.0, 597.522, 239.870],
      [0.0, 0.0, 1.0]], dtype=np.float64)
 
 intrinsic = o3d.camera.PinholeCameraIntrinsic()
 intrinsic.intrinsic_matrix = K
 print(intrinsic.intrinsic_matrix)
+
 ########################################################################################################################
 # Feature matching using SIFT algorithm
-########################################################################################################################
 # Find transformation matrix from corresponding points based on SIFT
-def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pcd, distance_ratio=0.6):
-
+########################################################################################################################
+def ORB_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_pcd):
     # Read image from path
     imgL = cv2.imread(img1)
     imgR = cv2.imread(img2)
@@ -37,73 +38,45 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
 
     # Intel RealSense D415
     depth_scaling_factor = 999.99
-    focal_length = 597.522 ## mm
+    focal_length = 597.522  ## mm
     img_center_x = 312.885
     img_center_y = 239.870
 
-    # sift = cv2.xfeatures2d.SIFT_create() # OpenCV 4.5 미만 버젼 사용중일 시
-    sift = cv2.SIFT_create() # OpenCV 4.5 이상의 버전 사용중일 시
+    # Create ORB
+    orb = cv2.ORB_create()
 
-    # Find keypoints and descriptors using SIFT
-    kp1, des1 = sift.detectAndCompute(imgL, None)
-    kp2, des2 = sift.detectAndCompute(imgR, None)
+    # Find keypoints and descriptors using ORB
+    kp1, des1 = orb.detectAndCompute(imgL, None)
+    kp2, des2 = orb.detectAndCompute(imgR, None)
 
-    '''
-    # FLANN Parameters
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-    search_params = dict(checks=50)
-    
-    # FLANN Matcher
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-
-    # Matching
-    matches = flann.knnMatch(des1, des2, k=2)
-
-    good = []
-    pts1 = []
-    pts2 = []
-    kp1_1 = []
-    kp2_1 = []
-    distance_ratio = 1.2
-    # Get Matched points under distance's threshold
-    for i, (m, n) in enumerate(matches[:10]):
-        if m.distance < distance_ratio * n.distance:
-            good.append([m])
-            pts2.append(kp2[m.trainIdx].pt)
-            pts1.append(kp1[m.queryIdx].pt)
-            kp1_1.append(kp1[m.queryIdx])
-            kp2_1.append(kp2[m.trainIdx])
-    '''
-    # BFMatcher
-    bf = cv2.BFMatcher(cv2.NORM_L1, crossCheck = False)
-    matches = bf.knnMatch(des1, des2, k=2)
-
-    # Need to draw only good matches, so create a mask
-    matchesMask = [[0, 0] for i in range(len(matches))]
+    # Create matcher
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(des1, des2)
+    matches = sorted(matches, key=lambda x: x.distance)
+    matches = matches[:40] # Only use 20 matches
     good_matches = []
     pts1 = []
     pts2 = []
     kp1_1 = []
     kp2_1 = []
+
+    # Get bounding area of object projection
     source_x_min, source_x_max, source_y_min, source_y_max = get_boundary(source_pcd)
     target_x_min, target_x_max, target_y_min, target_y_max = get_boundary(target_pcd)
     print(source_x_min, source_x_max, source_y_min, source_y_max)
     print(target_x_min, target_x_max, target_y_min, target_y_max)
 
-    # depth map에서 위치의 min, max x, y 찾아서 마스킹해서 outlier 제거
-    for i, (m, n) in enumerate(matches):
-        if m.distance < distance_ratio * n.distance: # 0.6 for castard,
-            if (kp1[m.queryIdx].pt[0] >= source_x_min and kp1[m.queryIdx].pt[0] <= source_x_max):
-                if (kp1[m.queryIdx].pt[1] >= source_y_min and kp1[m.queryIdx].pt[1] <= source_y_max):
-                    if (kp2[m.trainIdx].pt[0] >= target_x_min and kp2[m.trainIdx].pt[0] <= target_x_max):
-                        if (kp2[m.trainIdx].pt[1] >= target_y_min and kp2[m.trainIdx].pt[1] <= target_y_max):
-                            good_matches.append([m])
-                            pts1.append(kp1[m.queryIdx].pt) # Source pcd
-                            pts2.append(kp2[m.trainIdx].pt) # Target pcd
-                            kp1_1.append(kp1[m.queryIdx])
-                            kp2_1.append(kp2[m.trainIdx])
-                            matchesMask[i] = [1, 0]
+    # Add matches
+    for i in range(len(matches)):
+        idx_2 = int(matches[i].trainIdx)
+        idx_1 = int(matches[i].queryIdx)
+        if (kp1[idx_1].pt[0] >= source_x_min and kp1[idx_1].pt[0] <= source_x_max):
+            if (kp1[idx_1].pt[1] >= source_y_min and kp1[idx_1].pt[1] <= source_y_max):
+                if (kp2[idx_2].pt[0] >= target_x_min and kp2[idx_2].pt[0] <= target_x_max):
+                    if (kp2[idx_2].pt[1] >= target_y_min and kp2[idx_2].pt[1] <= target_y_max):
+                        good_matches.append(matches[i])
+                        pts2.append(kp2[idx_2].pt) # Source pcd
+                        pts1.append(kp1[idx_1].pt) # Target pcd
 
     # Print number of matched feature points
     print('Matched Num:', len(matches))
@@ -111,8 +84,7 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
     print('Left Keypoint num:', len(kp1_1))
     print('Right Keypoint num:', len(kp2_1))
 
-    img_matched = cv2.drawMatchesKnn(imgL, kp1, imgR, kp2, good_matches, None, matchColor=(0, 255, 0),
-                       singlePointColor=(255, 0, 0), flags=2)
+    img_matched = cv2.drawMatches(imgL, kp1, imgR, kp2, good_matches, None, matchColor=(0, 255, 0), singlePointColor=(255, 0, 0), flags=2)
     cv2.imshow('img_matched', img_matched)
     cv2.waitKey(0)
 
@@ -136,7 +108,7 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
         v = np.float64(pts1[i][1])
 
         # Normalized image plane -> (u, v, 1) * z = zu, zv, z
-        z = np.asarray(depthL, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor # in mm distance
+        z = np.asarray(depthL, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor  # in mm distance
         x = (u - img_center_x) * z / focal_length
         y = (v - img_center_y) * z / focal_length
         pts1_3d = np.append(pts1_3d, np.array([x, y, z], dtype=np.float32))
@@ -147,7 +119,7 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
         v = np.float64(pts2[i][1])
 
         # Normalized image plane
-        z = np.asarray(depthR, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor # in mm distance
+        z = np.asarray(depthR, dtype=np.float64)[np.int32(v)][np.int32(u)] / depth_scaling_factor  # in mm distance
         x = (u - img_center_x) * z / focal_length
         y = (v - img_center_y) * z / focal_length
         pts2_3d = np.append(pts2_3d, np.array([x, y, z], dtype=np.float32))
@@ -160,8 +132,8 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
     pcd1 = o3d.geometry.PointCloud()
     pcd2 = o3d.geometry.PointCloud()
 
-    #  pc_points: array(Nx3), each row composed with x, y, z in the 3D coordinate
-    #  pc_color: array(Nx3), each row composed with R G,B in the rage of 0 ~ 1
+    # pc_points: array(Nx3), each row composed with x, y, z in the 3D coordinate
+    # pc_color: array(Nx3), each row composed with R G,B in the rage of 0 ~ 1
     pc_points1 = np.array(pts1_3d, np.float32)
     pc_points2 = np.array(pts2_3d, np.float32)
     pc_color1 = np.array([], np.float32)
@@ -186,6 +158,7 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
     pcd1.colors = o3d.utility.Vector3dVector(pc_color1)
     pcd2.points = o3d.utility.Vector3dVector(pc_points2)
     pcd2.colors = o3d.utility.Vector3dVector(pc_color2)
+
     '''
     p2p = o3d.pipelines.registration.TransformationEstimationPointToPoint()
     R_t = p2p.compute_transformation(
@@ -194,10 +167,10 @@ def SIFT_Transformation(img1, img2, depth_img1, depth_img2, source_pcd, target_p
         correspondence_points
     )
     '''
-    R_t = match_ransac(pts1_3d, pts2_3d, tol=0.1)
 
+    R_t = match_ransac(pts1_3d, pts2_3d, tol=0.1)
 
     print("Transformation is:")
     print(R_t)
 
-    return R_t, pcd1, pcd2, pts1, pts2, pts1_3d, pts2_3d
+    return R_t, pcd1, pcd2
